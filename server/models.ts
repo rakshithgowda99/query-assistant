@@ -5,6 +5,7 @@ const articleSchema = new mongoose.Schema({
   content: { type: String, required: true },
   tags: { type: [String], default: [] },
   isPublic: { type: Boolean, default: false },
+  slug: { type: String, unique: false, sparse: true }, // Added slug but ensured it doesn't cause duplicate errors if null
 }, { 
   timestamps: true,
   toJSON: { 
