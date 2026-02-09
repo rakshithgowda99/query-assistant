@@ -37,3 +37,8 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+MONGODB_URI = "mongodb+srv://jobtracker_user:iBhrDiuhN32aYtsa@cluster0.lotfted.mongodb.net/?appName=Cluster0"

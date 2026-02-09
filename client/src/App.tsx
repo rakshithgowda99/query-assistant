@@ -5,12 +5,26 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
+// Pages
+import Home from "@/pages/Home";
+import ArticleView from "@/pages/ArticleView";
+import CreateArticle from "@/pages/CreateArticle";
+import EditArticle from "@/pages/EditArticle";
+import ArticleHistory from "@/pages/ArticleHistory";
+
 function Router() {
   return (
     <Switch>
-      {/* Add pages below */}
-      {/* <Route path="/" component={Home}/> */}
-      {/* Fallback to 404 */}
+      <Route path="/" component={Home} />
+      <Route path="/new" component={CreateArticle} />
+      <Route path="/article/:id" component={ArticleView} />
+      <Route path="/edit/:id" component={EditArticle} />
+      <Route path="/article/:id/versions" component={ArticleHistory} />
+      
+      {/* Fallback routes for demo sidebar links */}
+      <Route path="/favorites" component={Home} />
+      <Route path="/tags" component={Home} />
+
       <Route component={NotFound} />
     </Switch>
   );
