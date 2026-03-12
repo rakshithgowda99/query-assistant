@@ -25,7 +25,6 @@ import {
   Clock,
   Target,
   Sparkles,
-  Bot,
 } from "lucide-react";
 
 type AgentState = "IDLE" | "PARSING_QUERY" | "SEARCHING" | "RANKING" | "GENERATING" | "COMPLETE" | "ERROR";
@@ -75,7 +74,7 @@ interface AgentRun {
   messages: string[];
   results: RankedResult[];
   llmAnswer: string | null;
-  llmEnabled: boolean;
+  llmModel: string;
   metrics: RunMetrics;
   startedAt: string;
   completedAt?: string;
@@ -166,32 +165,13 @@ function StateMachineViz({ currentState, transitions }: { currentState: AgentSta
   );
 }
 
-function GeminiAnswerPanel({ answer, query, llmEnabled }: { answer: string | null; query: string; llmEnabled: boolean }) {
-  if (!llmEnabled) {
-    return (
-      <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-700">
-        <Bot className="w-4 h-4 shrink-0" />
-        <span>Gemini AI is not connected. Add your API key to enable AI-powered answers.</span>
-      </div>
-    );
-  }
+function AIAnswerPanel({ answer, query, llmModel }: { answer: string | null; query: string; llmModel: string }) {
   if (!answer) return null;
 
-  const isWarning = answer.startsWith("⚠️");
-
-  if (isWarning) {
-    return (
-      <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-        <Bot className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <p className="text-xs font-semibold text-amber-700">Gemini AI Status</p>
-          <p className="text-xs text-amber-700 leading-relaxed" data-testid="text-llm-answer">
-            {answer.replace("⚠️ ", "")}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  const modelLabel = llmModel?.includes('gemini') ? 'Gemini 2.0 Flash' : 'AI (Pollinations)';
+  const modelColor = llmModel?.includes('gemini')
+    ? 'bg-blue-100 text-blue-700 border-blue-200'
+    : 'bg-purple-100 text-purple-700 border-purple-200';
 
   return (
     <div className="bg-gradient-to-br from-blue-50 to-purple-50 border border-blue-200 rounded-xl p-4 space-y-2">
@@ -199,8 +179,8 @@ function GeminiAnswerPanel({ answer, query, llmEnabled }: { answer: string | nul
         <div className="bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg p-1.5">
           <Sparkles className="w-3.5 h-3.5 text-white" />
         </div>
-        <span className="text-sm font-semibold text-gray-800">Gemini AI Answer</span>
-        <Badge variant="secondary" className="text-[10px] bg-blue-100 text-blue-700 border-blue-200">gemini-2.0-flash</Badge>
+        <span className="text-sm font-semibold text-gray-800">AI Answer</span>
+        <Badge variant="secondary" className={`text-[10px] ${modelColor}`}>{modelLabel}</Badge>
       </div>
       <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap" data-testid="text-llm-answer">
         {answer}
@@ -291,17 +271,17 @@ function MetricsPanel({ metrics, state }: { metrics: RunMetrics | null; state: A
   );
 }
 
-function ResultsPanel({ results, state, llmAnswer, query, llmEnabled }: {
+function ResultsPanel({ results, state, llmAnswer, query, llmModel }: {
   results: RankedResult[];
   state: AgentState;
   llmAnswer: string | null;
   query: string;
-  llmEnabled: boolean;
+  llmModel: string;
 }) {
   const isPending = state === "IDLE" || state === "PARSING_QUERY" || state === "SEARCHING";
   return (
     <div className="space-y-4">
-      <GeminiAnswerPanel answer={llmAnswer} query={query} llmEnabled={llmEnabled} />
+      <AIAnswerPanel answer={llmAnswer} query={query} llmModel={llmModel} />
 
       {isPending ? (
         <p className="text-sm text-gray-400 italic">Results will appear after ranking completes.</p>
@@ -479,12 +459,10 @@ export default function QueryAssistant() {
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4 text-purple-600" />
           <h1 className="font-semibold text-gray-800 text-sm">Knowledge Base Query Assistant</h1>
-          {run?.llmEnabled && (
-            <Badge className="text-[10px] bg-gradient-to-r from-blue-500 to-purple-600 text-white border-0 gap-1">
-              <Sparkles className="w-2.5 h-2.5" />
-              Gemini AI
-            </Badge>
-          )}
+          <Badge className="text-[10px] bg-gradient-to-r from-blue-500 to-purple-600 text-white border-0 gap-1">
+            <Sparkles className="w-2.5 h-2.5" />
+            {run?.llmModel?.includes('gemini') ? 'Gemini AI' : 'AI Enabled'}
+          </Badge>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {run && (
@@ -660,7 +638,7 @@ export default function QueryAssistant() {
                   state={currentState}
                   llmAnswer={run?.llmAnswer ?? null}
                   query={run?.query ?? query}
-                  llmEnabled={run?.llmEnabled ?? false}
+                  llmModel={run?.llmModel ?? 'pollinations/openai'}
                 />
               </CardContent>
             </Card>
