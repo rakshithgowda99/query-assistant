@@ -67,6 +67,7 @@ export interface QueryInput {
   seed: number;
   topK?: number;
   maxSteps?: number;
+  articles?: KBArticle[];
 }
 
 const TOOL_ALLOWLIST = ['parse_query', 'search_json_store', 'rank_results', 'generate_answer'];
@@ -158,42 +159,56 @@ function tool_rank_results(
 }
 
 // Primary: Pollinations.ai — always free, no API key required
-async function generateWithPollinations(query: string, results: RankedResult[]): Promise<string> {
+async function generateWithPollinations(query: string, results: RankedResult[], allArticles: KBArticle[]): Promise<string> {
   const context = results.slice(0, 3).map((r, i) =>
     `[${i + 1}] Title: "${r.article.title}" | Tags: ${r.article.tags.join(', ')}\n${r.article.content}`
   ).join('\n\n');
 
   const systemPrompt = `You are a helpful knowledge base assistant. Answer user queries based on retrieved articles. Be concise (2-4 sentences), accurate, and reference article titles when relevant. If the articles don't answer the query, say so honestly.`;
 
+  const topicHints = allArticles.slice(0, 10).map(a => `"${a.title}"`).join(', ');
   const userPrompt = results.length > 0
     ? `User asked: "${query}"\n\nRetrieved articles:\n${context}\n\nPlease answer the user's query based on the above articles.`
-    : `User asked: "${query}"\n\nNo articles were found in the knowledge base for this query. The knowledge base covers: Machine Learning, Deep Learning, NLP, Python, Databases, REST APIs, Cloud Computing, Cybersecurity, Agile, Docker, React, Git, Data Structures, Microservices, and Reinforcement Learning.\n\nLet the user know no results were found and suggest a related topic.`;
+    : `User asked: "${query}"\n\nNo articles were found in the knowledge base for this query. The knowledge base currently contains articles on topics like: ${topicHints}${allArticles.length > 10 ? ', and more' : ''}.\n\nLet the user know no results were found and suggest they try a different search term or browse the wiki directly.`;
 
-  const response = await fetch('https://text.pollinations.ai/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      model: 'openai',
-      seed: 42,
-      private: true,
-    }),
-    signal: AbortSignal.timeout(20000),
+  const body = JSON.stringify({
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    model: 'openai',
+    seed: 42,
+    private: true,
   });
 
-  if (!response.ok) {
+  // Retry up to 3 times on transient errors (502, 503, 429)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await fetch('https://text.pollinations.ai/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(25000),
+    });
+
+    if (response.ok) {
+      const text = await response.text();
+      return text.trim();
+    }
+
+    if (attempt < 3 && (response.status === 502 || response.status === 503 || response.status === 429)) {
+      // Wait 2s before retrying
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+
     throw new Error(`Pollinations API error: ${response.status} ${response.statusText}`);
   }
 
-  const text = await response.text();
-  return text.trim();
+  throw new Error('Pollinations API failed after 3 attempts');
 }
 
 // Secondary fallback: Gemini (if user has a working API key)
-async function generateWithGemini(query: string, results: RankedResult[], apiKey: string): Promise<string> {
+async function generateWithGemini(query: string, results: RankedResult[], apiKey: string, allArticles: KBArticle[]): Promise<string> {
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
@@ -202,9 +217,10 @@ async function generateWithGemini(query: string, results: RankedResult[], apiKey
     `[${i + 1}] Title: ${r.article.title}\nTags: ${r.article.tags.join(', ')}\nContent: ${r.article.content}`
   ).join('\n\n');
 
+  const topicHints = allArticles.slice(0, 10).map(a => `"${a.title}"`).join(', ');
   const prompt = results.length > 0
     ? `You are a helpful knowledge base assistant. Based on the retrieved articles below, answer the user's query concisely (2-4 sentences). Reference article titles when relevant.\n\nUser Query: "${query}"\n\nRetrieved Articles:\n${context}`
-    : `You are a helpful knowledge base assistant. The user asked: "${query}". No matching articles were found. The knowledge base covers ML, Python, Docker, APIs, Cloud, Security, Agile, React, Git, and more. Suggest a related topic.`;
+    : `You are a helpful knowledge base assistant. The user asked: "${query}". No matching articles were found. The knowledge base contains articles on: ${topicHints}. Suggest a related topic or tell the user to try different keywords.`;
 
   const result = await model.generateContent(prompt);
   return result.response.text();
@@ -214,9 +230,16 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
   const { query, seed, topK = 5, maxSteps = MAX_STEPS } = input;
   const geminiKey = process.env.GEMINI_API_KEY;
 
+  // Use provided articles (real wiki from MongoDB) or fall back to static JSON
+  const articleSource: KBArticle[] = input.articles && input.articles.length > 0
+    ? input.articles
+    : (kbData as KBArticle[]);
+
   const runId = generateRunId(seed, query);
   const rand = seededRandom(seed);
   const startedAt = new Date().toISOString();
+
+  const sourceLabel = input.articles ? 'Wiki (MongoDB)' : 'Static JSON';
 
   const run: AgentRun = {
     runId,
@@ -230,7 +253,7 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     llmAnswer: null,
     llmModel: 'pollinations/openai',
     metrics: {
-      totalDocuments: kbData.length,
+      totalDocuments: articleSource.length,
       documentsSearched: 0,
       retrievalTimeMs: 0,
       topScore: 0,
@@ -258,6 +281,7 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     transition('START', 'PARSING_QUERY');
     run.messages.push(`Agent started. Run ID: ${runId}. Seed: ${seed}`);
     run.messages.push(`Received query: "${query}"`);
+    run.messages.push(`Knowledge base source: ${sourceLabel} (${articleSource.length} articles).`);
     run.messages.push('AI answer generation enabled via Pollinations.ai (free).');
     if (steps++ >= maxSteps) throw new Error('Max steps exceeded');
 
@@ -270,21 +294,21 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     if (steps++ >= maxSteps) throw new Error('Max steps exceeded');
 
     const searchStart = Date.now();
-    const candidates = tool_search_json_store(parsed.terms, kbData as KBArticle[]);
+    const candidates = tool_search_json_store(parsed.terms, articleSource);
     const searchMs = Date.now() - searchStart;
     logTool('search_json_store',
-      { terms: parsed.terms, totalDocs: kbData.length },
+      { terms: parsed.terms, totalDocs: articleSource.length },
       { candidateIds: candidates.map(c => c.id), count: candidates.length },
       searchMs
     );
     run.metrics.documentsSearched = candidates.length;
-    run.messages.push(`JSON store searched. Found ${candidates.length} candidate documents.`);
+    run.messages.push(`${sourceLabel} searched. Found ${candidates.length} candidate documents.`);
 
     transition('SEARCH_COMPLETE', 'RANKING');
     if (steps++ >= maxSteps) throw new Error('Max steps exceeded');
 
     const rankStart = Date.now();
-    const allRanked = tool_rank_results(parsed.terms, candidates, kbData as KBArticle[], rand);
+    const allRanked = tool_rank_results(parsed.terms, candidates, articleSource, rand);
     run.results = allRanked.slice(0, topK);
     const rankMs = Date.now() - rankStart;
     logTool('rank_results',
@@ -297,7 +321,7 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     const topScore = scores[0] ?? 0;
     const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
     const relevantCount = run.results.filter(r => r.score > 0.5).length;
-    const totalRelevant = (kbData as KBArticle[]).filter(a =>
+    const totalRelevant = articleSource.filter(a =>
       parsed.terms.some(t => `${a.title} ${a.tags.join(' ')} ${a.content}`.toLowerCase().includes(t))
     ).length;
     let mrr = 0;
@@ -306,7 +330,7 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     }
 
     run.metrics = {
-      totalDocuments: kbData.length,
+      totalDocuments: articleSource.length,
       documentsSearched: candidates.length,
       retrievalTimeMs: searchMs + rankMs,
       topScore: parseFloat(topScore.toFixed(4)),
@@ -330,18 +354,18 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     // Try Gemini first if API key is available
     if (geminiKey) {
       try {
-        llmAnswer = await generateWithGemini(query, run.results, geminiKey);
+        llmAnswer = await generateWithGemini(query, run.results, geminiKey, articleSource);
         modelUsed = 'gemini-2.0-flash';
         run.llmModel = modelUsed;
         run.messages.push(`Gemini answered successfully.`);
       } catch {
         run.messages.push('Gemini unavailable, using Pollinations.ai...');
-        llmAnswer = await generateWithPollinations(query, run.results);
+        llmAnswer = await generateWithPollinations(query, run.results, articleSource);
         modelUsed = 'pollinations/openai';
         run.llmModel = modelUsed;
       }
     } else {
-      llmAnswer = await generateWithPollinations(query, run.results);
+      llmAnswer = await generateWithPollinations(query, run.results, articleSource);
       modelUsed = 'pollinations/openai';
       run.llmModel = modelUsed;
     }

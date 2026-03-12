@@ -79,7 +79,17 @@ export async function registerRoutes(
         topK: z.number().int().min(1).max(10).optional(),
       });
       const input = schema.parse(req.body);
-      const run = await runQueryAgent(input);
+
+      // Fetch real wiki articles from MongoDB and convert to KBArticle format
+      const wikiArticles = await storage.getArticles();
+      const articles = wikiArticles.map(a => ({
+        id: a.id,
+        title: a.title,
+        tags: a.tags ?? [],
+        content: a.content,
+      }));
+
+      const run = await runQueryAgent({ ...input, articles });
       res.json(run);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -99,9 +109,14 @@ export async function registerRoutes(
     res.json(evaluation);
   });
 
-  app.get('/api/kb/articles', (_req, res) => {
-    const kbData = require('./kb-data.json');
-    res.json(kbData);
+  app.get('/api/kb/articles', async (_req, res) => {
+    const wikiArticles = await storage.getArticles();
+    res.json(wikiArticles.map(a => ({
+      id: a.id,
+      title: a.title,
+      tags: a.tags ?? [],
+      content: a.content,
+    })));
   });
 
   return httpServer;
