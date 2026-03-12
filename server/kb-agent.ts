@@ -1,7 +1,8 @@
 import { createHash } from 'crypto';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import kbData from './kb-data.json';
 
-export type AgentState = 'IDLE' | 'PARSING_QUERY' | 'SEARCHING' | 'RANKING' | 'COMPLETE' | 'ERROR';
+export type AgentState = 'IDLE' | 'PARSING_QUERY' | 'SEARCHING' | 'RANKING' | 'GENERATING' | 'COMPLETE' | 'ERROR';
 
 export interface KBArticle {
   id: string;
@@ -43,10 +44,12 @@ export interface AgentRun {
   toolCalls: ToolCall[];
   messages: string[];
   results: RankedResult[];
+  llmAnswer: string | null;
   metrics: RunMetrics;
   startedAt: string;
   completedAt?: string;
   error?: string;
+  llmEnabled: boolean;
 }
 
 export interface RunMetrics {
@@ -67,9 +70,9 @@ export interface QueryInput {
   maxSteps?: number;
 }
 
-const TOOL_ALLOWLIST = ['parse_query', 'search_json_store', 'rank_results'];
+const TOOL_ALLOWLIST = ['parse_query', 'search_json_store', 'rank_results', 'generate_answer'];
 const MAX_STEPS = 10;
-const TOOL_TIMEOUT_MS = 5000;
+const TOOL_TIMEOUT_MS = 30000;
 
 function seededRandom(seed: number): () => number {
   let s = seed % 2147483647;
@@ -90,7 +93,7 @@ function tokenize(text: string): string[] {
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter(t => t.length > 2);
+    .filter(t => t.length > 1);
 }
 
 function computeTFIDF(term: string, doc: string, allDocs: string[]): number {
@@ -101,13 +104,14 @@ function computeTFIDF(term: string, doc: string, allDocs: string[]): number {
   return tf * idf;
 }
 
-function tool_parse_query(query: string, seed: number): { terms: string[]; normalized: string } {
+function tool_parse_query(query: string): { terms: string[]; normalized: string } {
   const normalized = query.toLowerCase().trim();
   const terms = tokenize(normalized);
   return { terms, normalized };
 }
 
 function tool_search_json_store(terms: string[], articles: KBArticle[]): KBArticle[] {
+  if (terms.length === 0) return articles;
   return articles.filter(article => {
     const text = `${article.title} ${article.tags.join(' ')} ${article.content}`.toLowerCase();
     return terms.some(term => text.includes(term));
@@ -155,10 +159,45 @@ function tool_rank_results(
     .sort((a, b) => b.score - a.score);
 }
 
-export function runQueryAgent(input: QueryInput): AgentRun {
-  const { query, seed, topK = 5, maxSteps = MAX_STEPS } = input;
+async function tool_generate_answer(
+  query: string,
+  results: RankedResult[],
+  apiKey: string
+): Promise<string> {
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-  if (!TOOL_ALLOWLIST.length) throw new Error('No tools allowed');
+  const context = results.slice(0, 3).map((r, i) =>
+    `[${i + 1}] Title: ${r.article.title}\nTags: ${r.article.tags.join(', ')}\nContent: ${r.article.content}`
+  ).join('\n\n');
+
+  const prompt = results.length > 0
+    ? `You are a helpful knowledge base assistant. Based on the following retrieved articles, answer the user's query concisely and accurately.
+
+User Query: "${query}"
+
+Retrieved Articles:
+${context}
+
+Instructions:
+- Answer based only on the provided articles.
+- Be concise but complete (2-4 sentences).
+- Reference specific article titles when relevant.
+- If the articles don't fully answer the query, say so honestly.`
+    : `You are a helpful knowledge base assistant. The user asked: "${query}"
+
+No matching articles were found in the knowledge base. The knowledge base covers topics like: Machine Learning, Deep Learning, NLP, Python, Databases, REST APIs, Cloud Computing, Cybersecurity, Agile, Docker, React, Git, Data Structures, Microservices, and Reinforcement Learning.
+
+Please let the user know no results were found and suggest a related topic they could ask about.`;
+
+  const result = await model.generateContent(prompt);
+  return result.response.text();
+}
+
+export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
+  const { query, seed, topK = 5, maxSteps = MAX_STEPS } = input;
+  const apiKey = process.env.GEMINI_API_KEY;
+  const llmEnabled = !!apiKey;
 
   const runId = generateRunId(seed, query);
   const rand = seededRandom(seed);
@@ -173,6 +212,7 @@ export function runQueryAgent(input: QueryInput): AgentRun {
     toolCalls: [],
     messages: [],
     results: [],
+    llmAnswer: null,
     metrics: {
       totalDocuments: kbData.length,
       documentsSearched: 0,
@@ -184,6 +224,7 @@ export function runQueryAgent(input: QueryInput): AgentRun {
       mrr: 0,
     },
     startedAt,
+    llmEnabled,
   };
 
   function transition(event: string, to: AgentState) {
@@ -200,14 +241,23 @@ export function runQueryAgent(input: QueryInput): AgentRun {
     const start = Date.now();
     const output = fn();
     const durationMs = Date.now() - start;
-    if (durationMs > TOOL_TIMEOUT_MS) throw new Error(`Tool ${toolName} timed out`);
-    run.toolCalls.push({
-      tool: toolName,
-      input: inputData,
-      output,
-      timestamp: new Date().toISOString(),
-      durationMs,
-    });
+    run.toolCalls.push({ tool: toolName, input: inputData, output, timestamp: new Date().toISOString(), durationMs });
+    return output;
+  }
+
+  async function callAsyncTool(
+    toolName: string,
+    inputData: Record<string, unknown>,
+    fn: () => Promise<Record<string, unknown>>
+  ): Promise<Record<string, unknown>> {
+    if (!TOOL_ALLOWLIST.includes(toolName)) throw new Error(`Tool ${toolName} not allowed`);
+    const start = Date.now();
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Tool ${toolName} timed out`)), TOOL_TIMEOUT_MS)
+    );
+    const output = await Promise.race([fn(), timeoutPromise]);
+    const durationMs = Date.now() - start;
+    run.toolCalls.push({ tool: toolName, input: inputData, output, timestamp: new Date().toISOString(), durationMs });
     return output;
   }
 
@@ -217,16 +267,14 @@ export function runQueryAgent(input: QueryInput): AgentRun {
     transition('START', 'PARSING_QUERY');
     run.messages.push(`Agent started. Run ID: ${runId}. Seed: ${seed}`);
     run.messages.push(`Received query: "${query}"`);
+    if (llmEnabled) run.messages.push('Gemini LLM enabled — will generate AI answer after retrieval.');
 
     if (steps++ >= maxSteps) throw new Error('Max steps exceeded');
 
     const parseOutput = callTool(
       'parse_query',
       { query, seed },
-      () => {
-        const r = tool_parse_query(query, seed);
-        return r as unknown as Record<string, unknown>;
-      }
+      () => tool_parse_query(query) as unknown as Record<string, unknown>
     ) as { terms: string[]; normalized: string };
 
     run.messages.push(`Parsed ${parseOutput.terms.length} search terms: [${parseOutput.terms.join(', ')}]`);
@@ -273,9 +321,7 @@ export function runQueryAgent(input: QueryInput): AgentRun {
     const relevantCount = run.results.filter(r => r.score > 0.5).length;
     const precision = run.results.length > 0 ? relevantCount / run.results.length : 0;
     const totalRelevant = (kbData as KBArticle[]).filter(a =>
-      parseOutput.terms.some(t =>
-        `${a.title} ${a.tags.join(' ')} ${a.content}`.toLowerCase().includes(t)
-      )
+      parseOutput.terms.some(t => `${a.title} ${a.tags.join(' ')} ${a.content}`.toLowerCase().includes(t))
     ).length;
     const recall = totalRelevant > 0 ? Math.min(relevantCount / totalRelevant, 1) : 0;
 
@@ -298,8 +344,31 @@ export function runQueryAgent(input: QueryInput): AgentRun {
     run.messages.push(`Ranked ${run.results.length} results. Top score: ${topScore.toFixed(3)}.`);
     run.messages.push(`Best match: "${run.results[0]?.article.title ?? 'None'}" (score: ${(run.results[0]?.score ?? 0).toFixed(3)})`);
 
-    transition('RANKING_COMPLETE', 'COMPLETE');
+    if (llmEnabled && apiKey) {
+      transition('RANKING_COMPLETE', 'GENERATING');
+      run.messages.push('Sending context to Gemini for answer generation...');
+      if (steps++ >= maxSteps) throw new Error('Max steps exceeded');
+
+      const llmOutput = await callAsyncTool(
+        'generate_answer',
+        { query, topResultCount: run.results.length, model: 'gemini-1.5-flash' },
+        async () => {
+          const answer = await tool_generate_answer(query, run.results, apiKey);
+          return { answer, modelUsed: 'gemini-1.5-flash' };
+        }
+      ) as { answer: string; modelUsed: string };
+
+      run.llmAnswer = llmOutput.answer;
+      run.messages.push(`Gemini answer generated (${llmOutput.answer.length} chars).`);
+      transition('ANSWER_GENERATED', 'COMPLETE');
+    } else {
+      transition('RANKING_COMPLETE', 'COMPLETE');
+    }
+
     run.messages.push(`Run complete. Precision: ${(precision * 100).toFixed(1)}%, Recall: ${(recall * 100).toFixed(1)}%, MRR: ${mrr.toFixed(3)}`);
+    if (!llmEnabled) {
+      run.messages.push('Note: Set GEMINI_API_KEY to enable AI-generated answers.');
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     run.error = message;
@@ -339,7 +408,7 @@ export function runEvaluation(): {
   avgPrecision: number;
 } {
   const results = TEST_SCENARIOS.map(scenario => {
-    const run = runQueryAgent({ query: scenario.query, seed: scenario.seed });
+    const run = runQueryAgentSync({ query: scenario.query, seed: scenario.seed });
     const hit = run.results.length > 0 && run.results[0].article.id === scenario.expectedTopId;
     return { scenario, run, hit };
   });
@@ -354,4 +423,60 @@ export function runEvaluation(): {
     avgMRR: parseFloat(avgMRR.toFixed(4)),
     avgPrecision: parseFloat(avgPrecision.toFixed(4)),
   };
+}
+
+function runQueryAgentSync(input: QueryInput): AgentRun {
+  const { query, seed, topK = 5 } = input;
+  const rand = seededRandom(seed);
+  const runId = generateRunId(seed, query);
+  const startedAt = new Date().toISOString();
+
+  const run: AgentRun = {
+    runId, seed, query, state: 'IDLE', transitions: [], toolCalls: [], messages: [], results: [],
+    llmAnswer: null, llmEnabled: false,
+    metrics: { totalDocuments: kbData.length, documentsSearched: 0, retrievalTimeMs: 0, topScore: 0, avgScore: 0, precision: 0, recall: 0, mrr: 0 },
+    startedAt,
+  };
+
+  function transition(event: string, to: AgentState) {
+    run.transitions.push({ from: run.state, event, to, timestamp: new Date().toISOString() });
+    run.state = to;
+  }
+
+  try {
+    transition('START', 'PARSING_QUERY');
+    const parsed = tool_parse_query(query);
+    transition('QUERY_PARSED', 'SEARCHING');
+    const candidates = tool_search_json_store(parsed.terms, kbData as KBArticle[]);
+    run.metrics.documentsSearched = candidates.length;
+    transition('SEARCH_COMPLETE', 'RANKING');
+    const allRanked = tool_rank_results(parsed.terms, candidates, kbData as KBArticle[], rand);
+    run.results = allRanked.slice(0, topK);
+    const scores = run.results.map(r => r.score);
+    const relevantCount = run.results.filter(r => r.score > 0.5).length;
+    const totalRelevant = (kbData as KBArticle[]).filter(a =>
+      parsed.terms.some(t => `${a.title} ${a.tags.join(' ')} ${a.content}`.toLowerCase().includes(t))
+    ).length;
+    let mrr = 0;
+    for (let i = 0; i < run.results.length; i++) {
+      if (run.results[i].score > 0.5) { mrr = 1 / (i + 1); break; }
+    }
+    run.metrics = {
+      totalDocuments: kbData.length,
+      documentsSearched: candidates.length,
+      retrievalTimeMs: 0,
+      topScore: parseFloat((scores[0] ?? 0).toFixed(4)),
+      avgScore: parseFloat((scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0).toFixed(4)),
+      precision: parseFloat((run.results.length > 0 ? relevantCount / run.results.length : 0).toFixed(4)),
+      recall: parseFloat((totalRelevant > 0 ? Math.min(relevantCount / totalRelevant, 1) : 0).toFixed(4)),
+      mrr: parseFloat(mrr.toFixed(4)),
+    };
+    transition('RANKING_COMPLETE', 'COMPLETE');
+  } catch (err) {
+    run.error = err instanceof Error ? err.message : String(err);
+    transition('ERROR_OCCURRED', 'ERROR');
+  }
+
+  run.completedAt = new Date().toISOString();
+  return run;
 }
