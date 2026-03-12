@@ -71,7 +71,7 @@ export async function registerRoutes(
     res.json(versions);
   });
 
-  app.post('/api/kb/query', (req, res) => {
+  app.post('/api/kb/query', async (req, res) => {
     try {
       const schema = z.object({
         query: z.string().min(1).max(500),
@@ -79,7 +79,7 @@ export async function registerRoutes(
         topK: z.number().int().min(1).max(10).optional(),
       });
       const input = schema.parse(req.body);
-      const run = runQueryAgent(input);
+      const run = await runQueryAgent(input);
       res.json(run);
     } catch (err) {
       if (err instanceof z.ZodError) {

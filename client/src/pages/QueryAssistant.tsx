@@ -24,9 +24,11 @@ import {
   XCircle,
   Clock,
   Target,
+  Sparkles,
+  Bot,
 } from "lucide-react";
 
-type AgentState = "IDLE" | "PARSING_QUERY" | "SEARCHING" | "RANKING" | "COMPLETE" | "ERROR";
+type AgentState = "IDLE" | "PARSING_QUERY" | "SEARCHING" | "RANKING" | "GENERATING" | "COMPLETE" | "ERROR";
 
 interface StateTransition {
   from: AgentState;
@@ -72,6 +74,8 @@ interface AgentRun {
   toolCalls: ToolCall[];
   messages: string[];
   results: RankedResult[];
+  llmAnswer: string | null;
+  llmEnabled: boolean;
   metrics: RunMetrics;
   startedAt: string;
   completedAt?: string;
@@ -104,11 +108,12 @@ const STATE_COLORS: Record<AgentState, string> = {
   PARSING_QUERY: "bg-blue-100 text-blue-700 border-blue-300",
   SEARCHING: "bg-yellow-100 text-yellow-700 border-yellow-300",
   RANKING: "bg-purple-100 text-purple-700 border-purple-300",
+  GENERATING: "bg-orange-100 text-orange-700 border-orange-300",
   COMPLETE: "bg-green-100 text-green-700 border-green-300",
   ERROR: "bg-red-100 text-red-700 border-red-300",
 };
 
-const STATE_FLOW: AgentState[] = ["IDLE", "PARSING_QUERY", "SEARCHING", "RANKING", "COMPLETE"];
+const STATE_FLOW: AgentState[] = ["IDLE", "PARSING_QUERY", "SEARCHING", "RANKING", "GENERATING", "COMPLETE"];
 
 function StateMachineViz({ currentState, transitions }: { currentState: AgentState; transitions: StateTransition[] }) {
   return (
@@ -117,16 +122,14 @@ function StateMachineViz({ currentState, transitions }: { currentState: AgentSta
         {STATE_FLOW.map((state, idx) => (
           <div key={state} className="flex items-center gap-1">
             <div
-              className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${
+              className={`px-2.5 py-1.5 rounded-full border text-xs font-semibold transition-all ${
                 currentState === state
                   ? STATE_COLORS[state] + " ring-2 ring-offset-1 ring-current scale-105"
-                  : currentState === "ERROR" && state !== "IDLE"
-                  ? "bg-gray-50 text-gray-400 border-gray-200"
-                  : "bg-gray-50 text-gray-500 border-gray-200"
+                  : "bg-gray-50 text-gray-400 border-gray-200"
               }`}
               data-testid={`state-${state.toLowerCase()}`}
             >
-              {state.replace("_", " ")}
+              {state.replace(/_/g, " ")}
             </div>
             {idx < STATE_FLOW.length - 1 && (
               <ChevronRight className="w-3 h-3 text-gray-400" />
@@ -134,7 +137,7 @@ function StateMachineViz({ currentState, transitions }: { currentState: AgentSta
           </div>
         ))}
         {currentState === "ERROR" && (
-          <div className={`px-3 py-1.5 rounded-full border text-xs font-semibold ${STATE_COLORS.ERROR} ring-2 ring-offset-1 ring-current scale-105`}>
+          <div className={`px-2.5 py-1.5 rounded-full border text-xs font-semibold ${STATE_COLORS.ERROR} ring-2 ring-offset-1 ring-current scale-105`}>
             ERROR
           </div>
         )}
@@ -163,11 +166,61 @@ function StateMachineViz({ currentState, transitions }: { currentState: AgentSta
   );
 }
 
+function GeminiAnswerPanel({ answer, query, llmEnabled }: { answer: string | null; query: string; llmEnabled: boolean }) {
+  if (!llmEnabled) {
+    return (
+      <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-700">
+        <Bot className="w-4 h-4 shrink-0" />
+        <span>Gemini AI is not connected. Add your API key to enable AI-powered answers.</span>
+      </div>
+    );
+  }
+  if (!answer) return null;
+
+  const isWarning = answer.startsWith("⚠️");
+
+  if (isWarning) {
+    return (
+      <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+        <Bot className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-amber-700">Gemini AI Status</p>
+          <p className="text-xs text-amber-700 leading-relaxed" data-testid="text-llm-answer">
+            {answer.replace("⚠️ ", "")}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gradient-to-br from-blue-50 to-purple-50 border border-blue-200 rounded-xl p-4 space-y-2">
+      <div className="flex items-center gap-2">
+        <div className="bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg p-1.5">
+          <Sparkles className="w-3.5 h-3.5 text-white" />
+        </div>
+        <span className="text-sm font-semibold text-gray-800">Gemini AI Answer</span>
+        <Badge variant="secondary" className="text-[10px] bg-blue-100 text-blue-700 border-blue-200">gemini-2.0-flash</Badge>
+      </div>
+      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap" data-testid="text-llm-answer">
+        {answer}
+      </p>
+      <p className="text-[11px] text-gray-400 italic">Based on query: "{query}"</p>
+    </div>
+  );
+}
+
 function ToolCallPanel({ toolCalls }: { toolCalls: ToolCall[] }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   if (toolCalls.length === 0) {
     return <p className="text-sm text-gray-400 italic">No tool calls yet.</p>;
   }
+  const toolColors: Record<string, string> = {
+    parse_query: "text-blue-600",
+    search_json_store: "text-yellow-600",
+    rank_results: "text-purple-600",
+    generate_answer: "text-orange-600",
+  };
   return (
     <ScrollArea className="h-64">
       <div className="space-y-2 pr-2">
@@ -178,9 +231,12 @@ function ToolCallPanel({ toolCalls }: { toolCalls: ToolCall[] }) {
               className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 text-left"
             >
               <div className="flex items-center gap-2">
-                <Terminal className="w-3.5 h-3.5 text-purple-600" />
-                <span className="text-xs font-semibold font-mono text-purple-700">{tc.tool}</span>
+                <Terminal className={`w-3.5 h-3.5 ${toolColors[tc.tool] ?? "text-gray-500"}`} />
+                <span className={`text-xs font-semibold font-mono ${toolColors[tc.tool] ?? "text-gray-700"}`}>{tc.tool}</span>
                 <Badge variant="outline" className="text-[10px] px-1 py-0">{tc.durationMs}ms</Badge>
+                {tc.tool === "generate_answer" && (
+                  <Badge className="text-[10px] px-1 py-0 bg-orange-100 text-orange-700 border-orange-200">Gemini</Badge>
+                )}
               </div>
               <ChevronRight className={`w-3 h-3 text-gray-400 transition-transform ${expanded === i ? "rotate-90" : ""}`} />
             </button>
@@ -194,7 +250,7 @@ function ToolCallPanel({ toolCalls }: { toolCalls: ToolCall[] }) {
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-semibold text-gray-400 mb-1">OUTPUT</p>
-                  <pre className="bg-green-50 text-green-800 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+                  <pre className="bg-green-50 text-green-800 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
                     {JSON.stringify(tc.output, null, 2)}
                   </pre>
                 </div>
@@ -220,7 +276,6 @@ function MetricsPanel({ metrics, state }: { metrics: RunMetrics | null; state: A
     { label: "Retrieval Time", value: `${metrics.retrievalTimeMs}ms`, icon: Clock, color: "text-gray-600" },
     { label: "Docs Searched", value: `${metrics.documentsSearched}/${metrics.totalDocuments}`, icon: List, color: "text-indigo-600" },
   ];
-
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
       {items.map(({ label, value, icon: Icon, color }) => (
@@ -236,51 +291,67 @@ function MetricsPanel({ metrics, state }: { metrics: RunMetrics | null; state: A
   );
 }
 
-function ResultsPanel({ results, state }: { results: RankedResult[]; state: AgentState }) {
-  if (state === "IDLE" || state === "PARSING_QUERY" || state === "SEARCHING") {
-    return <p className="text-sm text-gray-400 italic">Results will appear after ranking completes.</p>;
-  }
-  if (results.length === 0) {
-    return <p className="text-sm text-gray-500 italic">No matching documents found.</p>;
-  }
+function ResultsPanel({ results, state, llmAnswer, query, llmEnabled }: {
+  results: RankedResult[];
+  state: AgentState;
+  llmAnswer: string | null;
+  query: string;
+  llmEnabled: boolean;
+}) {
+  const isPending = state === "IDLE" || state === "PARSING_QUERY" || state === "SEARCHING";
   return (
-    <ScrollArea className="h-72">
-      <div className="space-y-3 pr-2">
-        {results.map((r, i) => (
-          <div key={r.article.id} className={`border rounded-lg p-3 ${i === 0 ? "border-blue-200 bg-blue-50/50" : "bg-white"}`}
-            data-testid={`result-${r.article.id}`}>
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className={`text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center ${i === 0 ? "bg-blue-600 text-white" : "bg-gray-200 text-gray-600"}`}>
-                  {i + 1}
-                </span>
-                <h4 className="text-sm font-semibold text-gray-800">{r.article.title}</h4>
+    <div className="space-y-4">
+      <GeminiAnswerPanel answer={llmAnswer} query={query} llmEnabled={llmEnabled} />
+
+      {isPending ? (
+        <p className="text-sm text-gray-400 italic">Results will appear after ranking completes.</p>
+      ) : results.length === 0 ? (
+        <div className="text-center py-6 text-sm text-gray-500">
+          <Search className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+          <p className="font-medium">No matching documents found</p>
+          <p className="text-xs text-gray-400 mt-1">Try a different search term. The knowledge base covers ML, AI, Python, Docker, APIs, and more.</p>
+        </div>
+      ) : (
+        <ScrollArea className="h-64">
+          <div className="space-y-3 pr-2">
+            {results.map((r, i) => (
+              <div key={r.article.id}
+                className={`border rounded-lg p-3 ${i === 0 ? "border-blue-200 bg-blue-50/50" : "bg-white"}`}
+                data-testid={`result-${r.article.id}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center shrink-0 ${i === 0 ? "bg-blue-600 text-white" : "bg-gray-200 text-gray-600"}`}>
+                      {i + 1}
+                    </span>
+                    <h4 className="text-sm font-semibold text-gray-800">{r.article.title}</h4>
+                  </div>
+                  <span className="text-xs font-mono bg-gray-100 text-gray-700 px-2 py-0.5 rounded shrink-0">
+                    {r.score.toFixed(3)}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {r.article.tags.map(t => (
+                    <Badge key={t} variant="secondary" className="text-[10px]">{t}</Badge>
+                  ))}
+                </div>
+                <div className="mt-2 flex gap-3 text-[11px] text-gray-500">
+                  <span>Title: <span className="font-semibold text-gray-700">{r.titleScore.toFixed(2)}</span></span>
+                  <span>Tag: <span className="font-semibold text-gray-700">{r.tagScore.toFixed(2)}</span></span>
+                  <span>Content: <span className="font-semibold text-gray-700">{r.contentScore.toFixed(3)}</span></span>
+                </div>
+                {r.matchedTerms.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {r.matchedTerms.map(t => (
+                      <span key={t} className="text-[10px] bg-yellow-100 text-yellow-800 rounded px-1.5 py-0.5 font-mono">{t}</span>
+                    ))}
+                  </div>
+                )}
               </div>
-              <span className="text-xs font-mono bg-gray-100 text-gray-700 px-2 py-0.5 rounded shrink-0">
-                {r.score.toFixed(3)}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {r.article.tags.map(t => (
-                <Badge key={t} variant="secondary" className="text-[10px]">{t}</Badge>
-              ))}
-            </div>
-            <div className="mt-2 flex gap-3 text-[11px] text-gray-500">
-              <span>Title: <span className="font-semibold text-gray-700">{r.titleScore.toFixed(2)}</span></span>
-              <span>Tag: <span className="font-semibold text-gray-700">{r.tagScore.toFixed(2)}</span></span>
-              <span>Content: <span className="font-semibold text-gray-700">{r.contentScore.toFixed(3)}</span></span>
-            </div>
-            {r.matchedTerms.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {r.matchedTerms.map(t => (
-                  <span key={t} className="text-[10px] bg-yellow-100 text-yellow-800 rounded px-1.5 py-0.5 font-mono">{t}</span>
-                ))}
-              </div>
-            )}
+            ))}
           </div>
-        ))}
-      </div>
-    </ScrollArea>
+        </ScrollArea>
+      )}
+    </div>
   );
 }
 
@@ -297,17 +368,12 @@ function EvalPanel() {
           <h3 className="text-sm font-semibold text-gray-700">Retrieval Accuracy Demo</h3>
           <p className="text-xs text-gray-500">Runs all 10 test scenarios and measures retrieval accuracy.</p>
         </div>
-        <Button
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isFetching}
-          data-testid="button-run-evaluation"
-        >
+        <Button size="sm" onClick={() => refetch()} disabled={isFetching} data-testid="button-run-evaluation">
           {isFetching ? "Running..." : "Run Evaluation"}
         </Button>
       </div>
 
-      {isLoading || isFetching ? (
+      {isFetching ? (
         <div className="text-sm text-gray-400 italic">Running 10 scenarios...</div>
       ) : data ? (
         <div className="space-y-4">
@@ -325,11 +391,11 @@ function EvalPanel() {
               <p className="text-xs text-purple-600 font-medium">Avg Precision</p>
             </div>
           </div>
-
           <ScrollArea className="h-72">
             <div className="space-y-2 pr-2">
               {data.results.map(({ scenario, run, hit }) => (
-                <div key={scenario.id} className={`border rounded-lg p-3 ${hit ? "border-green-200 bg-green-50/40" : "border-red-200 bg-red-50/40"}`}
+                <div key={scenario.id}
+                  className={`border rounded-lg p-3 ${hit ? "border-green-200 bg-green-50/40" : "border-red-200 bg-red-50/40"}`}
                   data-testid={`eval-scenario-${scenario.id}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -343,12 +409,8 @@ function EvalPanel() {
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-[11px] font-mono text-gray-600">
-                        Got: {run.results[0]?.article.id ?? "none"}
-                      </p>
-                      <p className="text-[10px] text-gray-400">
-                        P={( run.metrics.precision * 100).toFixed(0)}% MRR={run.metrics.mrr.toFixed(2)}
-                      </p>
+                      <p className="text-[11px] font-mono text-gray-600">Got: {run.results[0]?.article.id ?? "none"}</p>
+                      <p className="text-[10px] text-gray-400">P={( run.metrics.precision * 100).toFixed(0)}% MRR={run.metrics.mrr.toFixed(2)}</p>
                     </div>
                   </div>
                   <p className="mt-1.5 text-[11px] text-gray-500 italic">"{scenario.query}"</p>
@@ -370,7 +432,6 @@ export default function QueryAssistant() {
   const [topK, setTopK] = useState(5);
   const [run, setRun] = useState<AgentRun | null>(null);
   const [activeTab, setActiveTab] = useState("results");
-  const transcriptRef = useRef<HTMLDivElement>(null);
 
   const { data: scenarios } = useQuery<Scenario[]>({ queryKey: ["/api/kb/scenarios"] });
 
@@ -381,6 +442,7 @@ export default function QueryAssistant() {
     },
     onSuccess: (data) => {
       setRun(data);
+      setActiveTab("results");
     },
   });
 
@@ -417,6 +479,12 @@ export default function QueryAssistant() {
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4 text-purple-600" />
           <h1 className="font-semibold text-gray-800 text-sm">Knowledge Base Query Assistant</h1>
+          {run?.llmEnabled && (
+            <Badge className="text-[10px] bg-gradient-to-r from-blue-500 to-purple-600 text-white border-0 gap-1">
+              <Sparkles className="w-2.5 h-2.5" />
+              Gemini AI
+            </Badge>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-2">
           {run && (
@@ -455,42 +523,34 @@ export default function QueryAssistant() {
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="text-xs font-medium text-gray-600 mb-1 block">Seed</label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={999999}
-                      value={seed}
+                    <Input type="number" min={0} max={999999} value={seed}
                       onChange={e => setSeed(parseInt(e.target.value) || 0)}
-                      data-testid="input-seed"
-                    />
+                      data-testid="input-seed" />
                   </div>
                   <div className="flex-1">
                     <label className="text-xs font-medium text-gray-600 mb-1 block">Top K Results</label>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10}
-                      value={topK}
+                    <Input type="number" min={1} max={10} value={topK}
                       onChange={e => setTopK(parseInt(e.target.value) || 5)}
-                      data-testid="input-topk"
-                    />
+                      data-testid="input-topk" />
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button
-                    onClick={handleRun}
-                    disabled={!query.trim() || queryMutation.isPending}
-                    className="gap-2"
-                    data-testid="button-run-query"
-                  >
+                  <Button onClick={handleRun} disabled={!query.trim() || queryMutation.isPending}
+                    className="gap-2" data-testid="button-run-query">
                     <Play className="w-4 h-4" />
-                    {queryMutation.isPending ? "Running..." : "Run Agent"}
+                    {queryMutation.isPending ? "Running Agent..." : "Run Agent"}
                   </Button>
                   <Button variant="outline" onClick={handleReset} className="gap-2" data-testid="button-reset">
                     <RotateCcw className="w-4 h-4" />
                     Reset
                   </Button>
                 </div>
+                {queryMutation.isPending && (
+                  <div className="flex items-center gap-2 text-xs text-purple-600 bg-purple-50 rounded-lg px-3 py-2">
+                    <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+                    Agent running — searching knowledge base and querying Gemini...
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -502,10 +562,7 @@ export default function QueryAssistant() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <StateMachineViz
-                  currentState={currentState}
-                  transitions={run?.transitions ?? []}
-                />
+                <StateMachineViz currentState={currentState} transitions={run?.transitions ?? []} />
               </CardContent>
             </Card>
 
@@ -534,12 +591,9 @@ export default function QueryAssistant() {
                 <ScrollArea className="h-56">
                   <div className="space-y-1.5 pr-2">
                     {scenarios?.map(s => (
-                      <button
-                        key={s.id}
-                        onClick={() => handleScenario(s)}
+                      <button key={s.id} onClick={() => handleScenario(s)}
                         className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-colors"
-                        data-testid={`scenario-${s.id}`}
-                      >
+                        data-testid={`scenario-${s.id}`}>
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-xs font-semibold text-gray-700">{s.description}</span>
                           <span className="text-[10px] text-gray-400 font-mono shrink-0">s={s.seed}</span>
@@ -561,10 +615,11 @@ export default function QueryAssistant() {
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-52">
-                  <div ref={transcriptRef} className="space-y-1 pr-2 font-mono text-[11px]">
+                  <div className="space-y-1 pr-2 font-mono text-[11px]">
                     {run?.messages.length ? (
                       run.messages.map((msg, i) => (
-                        <div key={i} className="flex gap-2 text-gray-600" data-testid={`msg-${i}`}>
+                        <div key={i} className={`flex gap-2 ${msg.startsWith("Gemini") || msg.includes("Gemini") ? "text-purple-700" : "text-gray-600"}`}
+                          data-testid={`msg-${i}`}>
                           <span className="text-gray-300 shrink-0">{String(i + 1).padStart(2, "0")}</span>
                           <span>{msg}</span>
                         </div>
@@ -587,7 +642,9 @@ export default function QueryAssistant() {
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList data-testid="tabs-main">
-            <TabsTrigger value="results" data-testid="tab-results">Results</TabsTrigger>
+            <TabsTrigger value="results" data-testid="tab-results">
+              Results {run?.llmEnabled && <Sparkles className="w-3 h-3 ml-1 text-purple-500" />}
+            </TabsTrigger>
             <TabsTrigger value="tools" data-testid="tab-tools">Tool Calls</TabsTrigger>
             <TabsTrigger value="evaluation" data-testid="tab-evaluation">Evaluation (10 Scenarios)</TabsTrigger>
           </TabsList>
@@ -595,10 +652,16 @@ export default function QueryAssistant() {
           <TabsContent value="results">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Ranked Results</CardTitle>
+                <CardTitle className="text-sm">Ranked Results & AI Answer</CardTitle>
               </CardHeader>
               <CardContent>
-                <ResultsPanel results={run?.results ?? []} state={currentState} />
+                <ResultsPanel
+                  results={run?.results ?? []}
+                  state={currentState}
+                  llmAnswer={run?.llmAnswer ?? null}
+                  query={run?.query ?? query}
+                  llmEnabled={run?.llmEnabled ?? false}
+                />
               </CardContent>
             </Card>
           </TabsContent>

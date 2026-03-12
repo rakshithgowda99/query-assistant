@@ -165,7 +165,7 @@ async function tool_generate_answer(
   apiKey: string
 ): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const context = results.slice(0, 3).map((r, i) =>
     `[${i + 1}] Title: ${r.article.title}\nTags: ${r.article.tags.join(', ')}\nContent: ${r.article.content}`
@@ -347,19 +347,42 @@ export async function runQueryAgent(input: QueryInput): Promise<AgentRun> {
     if (llmEnabled && apiKey) {
       transition('RANKING_COMPLETE', 'GENERATING');
       run.messages.push('Sending context to Gemini for answer generation...');
-      if (steps++ >= maxSteps) throw new Error('Max steps exceeded');
+      steps++;
 
-      const llmOutput = await callAsyncTool(
-        'generate_answer',
-        { query, topResultCount: run.results.length, model: 'gemini-1.5-flash' },
-        async () => {
-          const answer = await tool_generate_answer(query, run.results, apiKey);
-          return { answer, modelUsed: 'gemini-1.5-flash' };
+      const llmStart = Date.now();
+      let llmAnswer: string;
+      let llmError: string | null = null;
+
+      try {
+        llmAnswer = await tool_generate_answer(query, run.results, apiKey);
+      } catch (llmErr: unknown) {
+        const errMsg = llmErr instanceof Error ? llmErr.message : String(llmErr);
+        if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('Too Many Requests')) {
+          llmAnswer = `⚠️ Gemini API quota limit reached for today (free tier). The keyword retrieval results above are still accurate. To re-enable AI answers, wait until your daily quota resets or check your plan at https://ai.google.dev/gemini-api/docs/rate-limits`;
+          llmError = 'quota_exceeded';
+          run.messages.push('Gemini quota exceeded — showing retrieval results only.');
+        } else if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('API key')) {
+          llmAnswer = `⚠️ Gemini API key is invalid or unauthorized. Please check your GEMINI_API_KEY secret.`;
+          llmError = 'auth_error';
+          run.messages.push('Gemini API key error.');
+        } else {
+          llmAnswer = `⚠️ Gemini temporarily unavailable. ${errMsg.substring(0, 100)}`;
+          llmError = 'api_error';
+          run.messages.push(`Gemini error: ${errMsg.substring(0, 60)}`);
         }
-      ) as { answer: string; modelUsed: string };
+      }
 
-      run.llmAnswer = llmOutput.answer;
-      run.messages.push(`Gemini answer generated (${llmOutput.answer.length} chars).`);
+      const llmDurationMs = Date.now() - llmStart;
+      run.toolCalls.push({
+        tool: 'generate_answer',
+        input: { query, topResultCount: run.results.length, model: 'gemini-2.0-flash' },
+        output: llmError ? { error: llmError, fallback: true } : { answer: llmAnswer!.substring(0, 120) + '...', modelUsed: 'gemini-2.0-flash' },
+        timestamp: new Date().toISOString(),
+        durationMs: llmDurationMs,
+      });
+
+      run.llmAnswer = llmAnswer!;
+      if (!llmError) run.messages.push(`Gemini answer generated (${llmAnswer!.length} chars).`);
       transition('ANSWER_GENERATED', 'COMPLETE');
     } else {
       transition('RANKING_COMPLETE', 'COMPLETE');
