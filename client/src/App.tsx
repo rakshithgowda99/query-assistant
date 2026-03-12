@@ -11,6 +11,7 @@ import ArticleView from "@/pages/ArticleView";
 import CreateArticle from "@/pages/CreateArticle";
 import EditArticle from "@/pages/EditArticle";
 import ArticleHistory from "@/pages/ArticleHistory";
+import QueryAssistant from "@/pages/QueryAssistant";
 
 function Router() {
   return (
@@ -24,6 +25,7 @@ function Router() {
       {/* Fallback routes for demo sidebar links */}
       <Route path="/favorites" component={Home} />
       <Route path="/tags" component={Home} />
+      <Route path="/query-assistant" component={QueryAssistant} />
 
       <Route component={NotFound} />
     </Switch>

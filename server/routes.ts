@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { connectDB } from "./db";
 import { z } from "zod";
+import { runQueryAgent, runEvaluation, TEST_SCENARIOS } from "./kb-agent";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -68,6 +69,39 @@ export async function registerRoutes(
   app.get(api.versions.list.path, async (req, res) => {
     const versions = await storage.getArticleVersions(req.params.id);
     res.json(versions);
+  });
+
+  app.post('/api/kb/query', (req, res) => {
+    try {
+      const schema = z.object({
+        query: z.string().min(1).max(500),
+        seed: z.number().int().min(0).max(999999),
+        topK: z.number().int().min(1).max(10).optional(),
+      });
+      const input = schema.parse(req.body);
+      const run = runQueryAgent(input);
+      res.json(run);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0].message });
+      }
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).json({ message });
+    }
+  });
+
+  app.get('/api/kb/scenarios', (_req, res) => {
+    res.json(TEST_SCENARIOS);
+  });
+
+  app.get('/api/kb/evaluate', (_req, res) => {
+    const evaluation = runEvaluation();
+    res.json(evaluation);
+  });
+
+  app.get('/api/kb/articles', (_req, res) => {
+    const kbData = require('./kb-data.json');
+    res.json(kbData);
   });
 
   return httpServer;

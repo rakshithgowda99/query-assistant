@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { BookOpen, Search, Star, Tag, Plus, Library } from "lucide-react";
+import { BookOpen, Star, Tag, Plus, Library, Zap } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
 
@@ -8,8 +8,9 @@ export function Sidebar() {
 
   const navItems = [
     { icon: Library, label: "All Articles", href: "/" },
-    { icon: Star, label: "Favorites", href: "/favorites" }, // Placeholder for favorite functionality
+    { icon: Star, label: "Favorites", href: "/favorites" },
     { icon: Tag, label: "Tags", href: "/tags" },
+    { icon: Zap, label: "Query Assistant", href: "/query-assistant" },
   ];
 
   return (

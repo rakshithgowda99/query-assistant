@@ -1,0 +1,92 @@
+[
+  {
+    "id": "kb001",
+    "title": "Introduction to Machine Learning",
+    "tags": ["machine learning", "ai", "supervised learning"],
+    "content": "Machine learning is a subset of artificial intelligence that enables systems to learn and improve from experience without being explicitly programmed. It focuses on developing computer programs that can access data and use it to learn for themselves. Supervised learning uses labeled training data to train models."
+  },
+  {
+    "id": "kb002",
+    "title": "Deep Learning and Neural Networks",
+    "tags": ["deep learning", "neural networks", "ai", "backpropagation"],
+    "content": "Deep learning is part of machine learning based on artificial neural networks with multiple layers. Neural networks are computing systems inspired by biological neural networks. Backpropagation is the key algorithm for training deep neural networks by computing gradients."
+  },
+  {
+    "id": "kb003",
+    "title": "Natural Language Processing Basics",
+    "tags": ["nlp", "text processing", "tokenization", "ai"],
+    "content": "Natural Language Processing (NLP) is a field of AI that gives machines the ability to read, understand, and derive meaning from human language. Key tasks include tokenization, named entity recognition, sentiment analysis, and machine translation."
+  },
+  {
+    "id": "kb004",
+    "title": "Python Programming Guide",
+    "tags": ["python", "programming", "beginner", "syntax"],
+    "content": "Python is a high-level, general-purpose programming language known for its simplicity and readability. It supports multiple programming paradigms including procedural, object-oriented, and functional programming. Python is widely used in data science, web development, and automation."
+  },
+  {
+    "id": "kb005",
+    "title": "Database Design Principles",
+    "tags": ["database", "sql", "schema", "normalization"],
+    "content": "Database design involves organizing data efficiently and ensuring data integrity. Key concepts include normalization (eliminating redundancy), indexing (improving query performance), and ACID properties (Atomicity, Consistency, Isolation, Durability). SQL is the standard language for relational databases."
+  },
+  {
+    "id": "kb006",
+    "title": "REST API Design Best Practices",
+    "tags": ["api", "rest", "http", "web development"],
+    "content": "REST (Representational State Transfer) is an architectural style for designing networked applications. Best practices include using proper HTTP methods (GET, POST, PUT, DELETE), meaningful URL structures, appropriate status codes, versioning, and authentication via tokens or OAuth."
+  },
+  {
+    "id": "kb007",
+    "title": "Cloud Computing Fundamentals",
+    "tags": ["cloud", "aws", "azure", "infrastructure"],
+    "content": "Cloud computing delivers computing services over the internet including servers, storage, databases, networking, and software. Major providers include AWS, Azure, and Google Cloud. Key models are IaaS, PaaS, and SaaS. Benefits include scalability, cost reduction, and flexibility."
+  },
+  {
+    "id": "kb008",
+    "title": "Cybersecurity Essentials",
+    "tags": ["security", "encryption", "firewall", "authentication"],
+    "content": "Cybersecurity protects systems, networks, and programs from digital attacks. Core concepts include encryption (protecting data confidentiality), authentication (verifying identity), firewalls (network barriers), and penetration testing. Common threats are phishing, ransomware, and SQL injection."
+  },
+  {
+    "id": "kb009",
+    "title": "Agile Software Development",
+    "tags": ["agile", "scrum", "sprint", "project management"],
+    "content": "Agile software development promotes iterative development, collaboration, and flexibility. Scrum is a popular agile framework using sprints (time-boxed iterations), daily standups, sprint planning, and retrospectives. Kanban is another agile method using visual boards to manage workflow."
+  },
+  {
+    "id": "kb010",
+    "title": "Docker and Containerization",
+    "tags": ["docker", "containers", "devops", "kubernetes"],
+    "content": "Docker is a platform for developing, shipping, and running applications in containers. Containers package code and dependencies together ensuring consistency across environments. Kubernetes orchestrates containerized applications at scale. Key concepts: images, containers, Dockerfile, docker-compose."
+  },
+  {
+    "id": "kb011",
+    "title": "React Frontend Development",
+    "tags": ["react", "javascript", "frontend", "components"],
+    "content": "React is a JavaScript library for building user interfaces using a component-based architecture. Key concepts include JSX syntax, props and state management, hooks (useState, useEffect), virtual DOM for performance, and component lifecycle. React is maintained by Meta and has a large ecosystem."
+  },
+  {
+    "id": "kb012",
+    "title": "Git Version Control",
+    "tags": ["git", "version control", "branching", "collaboration"],
+    "content": "Git is a distributed version control system for tracking changes in source code. Core commands include commit, push, pull, branch, merge, and rebase. Best practices include meaningful commit messages, feature branching, pull requests for code review, and tagging releases."
+  },
+  {
+    "id": "kb013",
+    "title": "Data Structures and Algorithms",
+    "tags": ["algorithms", "data structures", "complexity", "sorting"],
+    "content": "Data structures organize data for efficient access and modification. Common structures include arrays, linked lists, stacks, queues, trees, and graphs. Algorithms are step-by-step procedures for solving problems. Big O notation describes time and space complexity. Sorting algorithms include quicksort, mergesort, and heapsort."
+  },
+  {
+    "id": "kb014",
+    "title": "Microservices Architecture",
+    "tags": ["microservices", "architecture", "scalability", "api gateway"],
+    "content": "Microservices architecture structures an application as a collection of small, independently deployable services. Each service runs its own process and communicates via APIs. Benefits include independent deployment, scalability per service, and technology flexibility. Challenges include distributed system complexity and service discovery."
+  },
+  {
+    "id": "kb015",
+    "title": "Reinforcement Learning Concepts",
+    "tags": ["reinforcement learning", "ai", "reward", "agent"],
+    "content": "Reinforcement learning is a type of machine learning where an agent learns to make decisions by interacting with an environment. The agent receives rewards or penalties based on actions taken. Key concepts include Markov Decision Processes, Q-learning, policy gradients, and exploration vs exploitation trade-off."
+  }
+]
